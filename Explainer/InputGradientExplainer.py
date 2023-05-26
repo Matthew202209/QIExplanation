@@ -9,12 +9,10 @@ from Config import config
 from dataloader import DataLoader
 import pickle
 from tqdm import tqdm
-from rsr_model import NRSR
+from PredModel.rsr_model import NRSR
 
 from Config import config
 from Explainer.BaseExplainer import BaseExplainer
-from runGraphModel import parse_args
-from Evaluation import FidelityEvaluation
 
 
 class InputGradientExplainer(nn.Module):
@@ -60,37 +58,37 @@ def effect_explainer_explain(model):
     return masked_adj
 
 
-if __name__ == '__main__':
-    device = 'cpu'
-    args = parse_args(config.NRSR_dict)
-    #
-    #     # 导入数据
-    data_path = r"{}/{}.pkl".format(args.feature_data_path, args.feature_data_year)
-    f = open(data_path, 'rb')
-    feature_data = pickle.load(f)
-    f.close()
-    graph_data = torch.Tensor(np.load(args.graph_data_path)).to(device)
-
-    # 创建dataloader
-    start_index = len(feature_data.groupby(level=0).size())
-    data_loader = DataLoader(feature_data["feature"], feature_data["label"],
-                             feature_data['market_value'], feature_data['stock_index'],
-                             pin_memory=True, start_index=start_index, device=device)
-
-    with torch.no_grad():
-        num_relation = graph_data.shape[2]  # the number of relations
-        model = NRSR(num_relation=num_relation,
-                     d_feat=args.d_feat,
-                     num_layers=args.num_layers)
-
-        model.to(device)
-        model.load_state_dict(torch.load(args.model_dir + '/model.bin', map_location=device))
-
-    for i, slc in tqdm(data_loader.iter_daily(), total=data_loader.daily_length):
-        feature, label, market_value, stock_index, index = data_loader.get(slc)
-        b = graph_data[stock_index][:, stock_index]
-        a = effect_explainer_explain(model, feature, graph_data[stock_index][:, stock_index], label)
-        break
+# if __name__ == '__main__':
+#     device = 'cpu'
+#     args = parse_args(config.NRSR_dict)
+#     #
+#     #     # 导入数据
+#     data_path = r"{}/{}.pkl".format(args.feature_data_path, args.feature_data_year)
+#     f = open(data_path, 'rb')
+#     feature_data = pickle.load(f)
+#     f.close()
+#     graph_data = torch.Tensor(np.load(args.graph_data_path)).to(device)
+#
+#     # 创建dataloader
+#     start_index = len(feature_data.groupby(level=0).size())
+#     data_loader = DataLoader(feature_data["feature"], feature_data["label"],
+#                              feature_data['market_value'], feature_data['stock_index'],
+#                              pin_memory=True, start_index=start_index, device=device)
+#
+#     with torch.no_grad():
+#         num_relation = graph_data.shape[2]  # the number of relations
+#         model = NRSR(num_relation=num_relation,
+#                      d_feat=args.d_feat,
+#                      num_layers=args.num_layers)
+#
+#         model.to(device)
+#         model.load_state_dict(torch.load(args.model_dir + '/model.bin', map_location=device))
+#
+#     for i, slc in tqdm(data_loader.iter_daily(), total=data_loader.daily_length):
+#         feature, label, market_value, stock_index, index = data_loader.get(slc)
+#         b = graph_data[stock_index][:, stock_index]
+#         a = effect_explainer_explain(model, feature, graph_data[stock_index][:, stock_index], label)
+#         break
 
 
 

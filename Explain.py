@@ -1,8 +1,10 @@
+import math
 import pickle
-
+import scipy.stats as stats
 import networkx as nx
 import numpy as np
 import torch
+import random
 from tqdm import tqdm
 from Config import parse_args, config
 from Explainer.EffectExplainer import EffectExplainer
@@ -18,9 +20,10 @@ class Explanation:
         self.args = args
         # device
         self.device = args.device
-        #data
+        # data
         self.data = None
         self.graph_data = None
+        self.data_loader = None
         self.feature_data_path = args.feature_data_path
         self.year = args.year
         self.graph_data_path = args.graph_data_path
@@ -34,13 +37,18 @@ class Explanation:
         # explainer
         self.explainer_name = explainer_name
         self.explainer = None
+        self.EG = None
 
         #
-        self.explained_graph_dict = {explainer_name:[]}
+        self.explained_graph_list = []
+        self.explained_graph_dict = {explainer_name: []}
+        self.evaluation_results = {explainer_name: []}
         # Explanation preparation
         self.load_data()
         self.get_pred_model()
         self.get_explainer()
+        self.get_data_loader()
+
 
     def get_pred_model(self):
         with torch.no_grad():
@@ -72,23 +80,112 @@ class Explanation:
         self.graph_data = torch.Tensor(np.load(self.graph_data_path)).to(self.device)
         self.num_relation = self.graph_data.shape[2]
 
+    def get_data_loader(self):
+        start_index = len(self.data.groupby(level=0).size())
+        self.data_loader = DataLoader(self.data["feature"], self.data["label"],
+                                      self.data['market_value'], self.data['stock_index'],
+                                      pin_memory=True, start_index=start_index, device=self.device)
+
     def explain(self):
         start_index = len(self.data.groupby(level=0).size())
         data_loader = DataLoader(self.data["feature"], self.data["label"],
                                  self.data['market_value'], self.data['stock_index'],
                                  pin_memory=True, start_index=start_index, device=self.device)
-        for i, slc in tqdm(data_loader.iter_daily(), total=data_loader.daily_length):
+        for i, slc in tqdm(self.data_loader.iter_daily(), total=self.data_loader.daily_length):
             feature, label, market_value, stock_index, index = data_loader.get(slc)
-            expl_graph = self.explainer(self.pred_model, feature,
-                                        self.graph_data[stock_index][:, stock_index], args)
-            EG = nx.from_numpy_array(expl_graph.detach().numpy())
-            self.explained_graph_dict[self.explainer_name] += [EG]
+            graph = self.graph_data[stock_index][:, stock_index]
+            original_pred = self.pred_model(feature, graph)
+            if self.explainer_name=='random':
+                ran_k_graph, ran_k_comp_graph = self.random_edges_extraction()
+                fidelity_L1, causality_L1 = self.cal_random_selection_metrics(original_pred, label,
+                                                  feature, ran_k_graph,
+                                                  ran_k_comp_graph)
+                self.evaluation_results[self.explainer_name] += [[fidelity_L1, causality_L1]]
+
+            else:
+                expl_graph = self.explainer(self.pred_model, feature, graph, args)
+                self.EG = nx.from_numpy_array(expl_graph.detach().numpy())
+                self.explained_graph_dict[self.explainer_name] += [self.EG]
+                fidelity_L1, causality_L1 = self.evaluate(original_pred, graph, feature, label)
+                self.evaluation_results[self.explainer_name] += [[fidelity_L1, causality_L1]]
+
 
     def save_explanation(self):
-        pass
+        file = r'{}/{}-{}.pkl'.format(self.args.expl_results_dir, self.explainer_name, self.year)
+        f = open(file, 'wb')
+        pickle.dump(self.explained_graph_dict[self.explainer_name], f)
+        f.close()
+        print('Save Explanation {}'.format(file))
 
-    def evaluate(self):
-        pass
+    def evaluate(self, original_pred, graph, feature, label):
+        top_k_graph, top_k_comp_graph = self.edges_extraction(graph)
+        pred_top_k = self.pred_model(feature, top_k_graph)
+        pred_top_k_comp = self.pred_model(feature, top_k_comp_graph)
+
+        fidelity_L1 = Explanation.cal_fidelity(pred_top_k, pred_top_k_comp, original_pred)
+        causality_L1 = Explanation.cal_causality(pred_top_k_comp, original_pred, label)
+        return fidelity_L1, causality_L1
+
+
+    def edges_extraction(self, origin_graph):
+        sorted_edges = sorted(self.EG.edges(data=True), key=lambda x: x[2]['weight'], reverse=True)
+        top = range(0, math.ceil(int(len(sorted_edges)) * self.args.top_k))
+        top_k_edges = [sorted_edges[x] for x in top]
+        top_k_comp_edges = [sorted_edges[x] for x in range(0, len(sorted_edges)) if x not in top]
+
+        top_k_graph = Explanation.edges_2_graph(top_k_comp_edges, origin_graph.clone().detach())
+        top_k_comp_graph = Explanation.edges_2_graph(top_k_edges, origin_graph.clone().detach())
+        return top_k_graph, top_k_comp_graph
+
+    def cal_random_selection_metrics(self, original_pred, label, feature, random_k_complement,random_k_graph):
+        pred_top_k_comp = self.pred_model(feature, random_k_complement)
+        pred_top_k = self.pred_model(feature, random_k_graph)
+        fidelity_l1 = Explanation.cal_fidelity(pred_top_k_comp, pred_top_k, original_pred)
+        causality_L1 = Explanation.cal_causality(pred_top_k_comp, original_pred, label)
+
+        return float(fidelity_l1), float(causality_L1)
+
+    def random_edges_extraction(self):
+        new_graph = torch.zeros([self.graph_data.shape[0], self.graph_data.shape[1]], dtype=torch.int)
+        mask = torch.sum(self.graph_data, 2)  # mask that could have relation value
+        index = torch.t((mask == 1).nonzero())
+        new_graph[index[0], index[1]] = 1
+        G_edge = nx.from_numpy_array(new_graph.detach().numpy())
+        G_edge = list(G_edge.edges)
+        edge_num = len(G_edge)
+        random.seed(101)
+        ran = random.sample(range(0, edge_num), math.ceil(edge_num * self.args.top_k))
+        ran_k_edges = [G_edge[x] for x in ran]
+        ran_k_comp_edges = [G_edge[x] for x in range(0, edge_num) if x not in ran]
+
+        ran_k_graph = Explanation.edges_2_graph(ran_k_comp_edges, self.graph_data.clone().detach())
+        ran_k_comp_graph = Explanation.edges_2_graph(ran_k_edges, self.graph_data.clone().detach())
+        return ran_k_graph, ran_k_comp_graph
+
+    @staticmethod
+    def cal_fidelity(top_k_comp_pred, top_k_pred, original_pred):
+        # L1
+        loss_func = torch.nn.L1Loss(reduction='mean')
+        top_k_l1 = loss_func(top_k_pred, original_pred)
+        top_k_comp_l1 = loss_func(top_k_comp_pred, original_pred)
+
+        fidelity_l1 = 1 - top_k_l1 / top_k_comp_l1
+        return float(fidelity_l1)
+
+    @staticmethod
+    def cal_causality(top_k_comp_pred, original_pred, label):
+        # L1
+        loss_func = torch.nn.L1Loss(reduction='mean')
+        tok_k_comp_l1 = loss_func(top_k_comp_pred, label)
+        original_l1 = loss_func(original_pred, label)
+        causality_l1 = 1 - original_l1 / tok_k_comp_l1
+
+        return float(causality_l1)
+    @staticmethod
+    def edges_2_graph(comp_edges, origin_graph):
+        for edge in comp_edges:
+            origin_graph[edge[0], edge[1]] = 0
+        return origin_graph
 
 
 if __name__ == '__main__':
