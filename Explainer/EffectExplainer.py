@@ -13,7 +13,7 @@ class EffectExplainer(nn.Module):
         super(EffectExplainer, self).__init__()
         self.model = model
 
-    def forward(self, feat, adj):
+    def run_explain(self, feat, adj):
         with torch.no_grad():
             self.model.using_attention_explanation()
             _ = self.model(feat, adj)
@@ -21,15 +21,6 @@ class EffectExplainer(nn.Module):
         return edge_weight_matrix
 
 
-def attention_explainer_explain(model, feat, adj):
-    explainer = EffectExplainer(
-        model=model
-    )
-
-    masked_adj = explainer()
-    del explainer
-    gc.collect()
-    return masked_adj
 
 
 

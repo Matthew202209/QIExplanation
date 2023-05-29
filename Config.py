@@ -21,12 +21,12 @@ def parse_args(param_dict):
     parser.add_argument('--model_dir', default=param_dict['model_dir'])
     # feature
     parser.add_argument('--feature_data_path', default=param_dict['feature_data_path'])
-    parser.add_argument('--year', default=param_dict['year'])
+    parser.add_argument('--year', default='2020')
     parser.add_argument('--graph_data_path', default=param_dict['graph_data_path'])
     parser.add_argument('--d_feat', type=int, default=param_dict['d_feat'])
     parser.add_argument('--num_layers', type=int, default=param_dict['num_layers'])
     # explanation
-    parser.add_argument('--seed', type=int, default=101)
+
     parser.add_argument('--expl_results_dir', type=str, default='./ExplanationResults')
     parser.add_argument('--save_name', type=str, default='pred_loss2021')
     parser.add_argument('--init_strategy', type=str, default='normal')
@@ -35,8 +35,8 @@ def parse_args(param_dict):
     parser.add_argument('--lr', type=float, default=0.1)
     parser.add_argument('--size_lamda', type=float, default=0.000001)
     parser.add_argument('--density_lamda', type=float, default=0.01)
-    parser.add_argument('--num_epochs', type=int, default=25)
-
+    parser.add_argument('--num_epochs', type=int, default=10)
+    parser.add_argument('--top_k', type=int, default=0.2)
     parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()
     return args

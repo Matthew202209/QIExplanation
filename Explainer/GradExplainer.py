@@ -12,28 +12,18 @@ class GradExplainer(nn.Module):
         super(GradExplainer, self).__init__()
         self.model = model
 
-    def forward(self, feat, adj):
+    def run_explain(self, feat, adj):
         self.model.zero_grad()
-        self.adj.requires_grad = True
-        if self.adj.grad is not None:
-            self.adj.grad.zero_()
+        adj.requires_grad = True
+        if adj.grad is not None:
+            adj.grad.zero_()
         ypred = self.model(feat, adj)
         loss = ypred.sum()
         loss.backward()
-        edge_weight_matrix = adj.grad
+        masked_adj = adj.grad
+        edge_weight_matrix = torch.sum(masked_adj, 2) / masked_adj.shape[2]
         return edge_weight_matrix
 
-
-def grad_explainer_explain(model, feat, adj):
-    explainer = GradExplainer(
-        model=model
-    )
-
-    masked_adj = explainer()
-    del explainer
-    gc.collect()
-    a = torch.sum(masked_adj, 2)
-    return torch.sum(masked_adj, 2) / masked_adj.shape[2]
 
 
 

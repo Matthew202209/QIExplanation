@@ -25,18 +25,16 @@ class GNNExplainer(nn.Module):
         self.feat = None
         self.mask = None
         self.model = model
-
         self.args = args
         self.mask_act = args.mask_act
-
         self.masked_adj = None
         self.optimizer = None
 
     def set_optimizer(self):
-        self.optimizer = optim.Adam(self.mask, lr=self.args.lr, weight_decay=0.0)
+        self.mask.requires_grad = True
+        self.optimizer = optim.Adam([self.mask], lr=self.args.lr, weight_decay=0.0)
 
     def construct_edge_mask(self):
-
         mask = nn.Parameter(torch.tensor(np.random.rand(self.adj.shape[0],
                                                         self.adj.shape[1],
                                                         self.adj.shape[2]), dtype=torch.float32), requires_grad=False)
@@ -60,10 +58,12 @@ class GNNExplainer(nn.Module):
         masked_adj = self.adj * sym_mask
         return masked_adj
 
-    def forward(self, feat, adj):
+    def run_explain(self, feat, adj):
         self.adj = adj
         self.feat = feat
         self.construct_edge_mask()
+        self.set_optimizer()
+
         original_pred = self.model(self.feat, self.adj)
         for epoch in range(self.args.num_epochs):
             self.optimizer.zero_grad()

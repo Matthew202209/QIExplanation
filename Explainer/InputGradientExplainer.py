@@ -1,5 +1,4 @@
-import argparse
-import gc
+
 
 import numpy as np
 import torch.nn as nn
@@ -24,7 +23,7 @@ class InputGradientExplainer(nn.Module):
         self.model = model
         self.loss_func = nn.MSELoss()
 
-    def forward(self, feat, adj):
+    def run_explain(self, feat, adj):
         self.model.using_effect_explanation()
         ypred = self.model(feat, adj)
 
@@ -48,15 +47,6 @@ class InputGradientExplainer(nn.Module):
 
         edge_weight_matrix = edge_weight_matrix*10**5
         return edge_weight_matrix
-
-
-def effect_explainer_explain(model):
-    explainer = InputGradientExplainer(model=model)
-    masked_adj = explainer()
-    del explainer
-    gc.collect()
-    return masked_adj
-
 
 # if __name__ == '__main__':
 #     device = 'cpu'

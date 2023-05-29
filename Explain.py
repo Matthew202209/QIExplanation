@@ -1,5 +1,7 @@
 import math
 import pickle
+
+import pandas as pd
 import scipy.stats as stats
 import networkx as nx
 import numpy as np
@@ -16,7 +18,7 @@ from dataloader import DataLoader
 
 
 class Explanation:
-    def __init__(self, args, explainer_name='InputGradientExplainer'):
+    def __init__(self, args, year, explainer_name='InputGradientExplainer'):
         self.args = args
         # device
         self.device = args.device
@@ -25,7 +27,7 @@ class Explanation:
         self.graph_data = None
         self.data_loader = None
         self.feature_data_path = args.feature_data_path
-        self.year = args.year
+        self.year = year
         self.graph_data_path = args.graph_data_path
         # model
         self.d_feat = args.d_feat
@@ -42,22 +44,22 @@ class Explanation:
         #
         self.explained_graph_list = []
         self.explained_graph_dict = {explainer_name: []}
-        self.evaluation_results = {explainer_name: []}
+        self.evaluation_results = []
+        self.eval_results_df = None
         # Explanation preparation
         self.load_data()
         self.get_pred_model()
         self.get_explainer()
         self.get_data_loader()
 
-
     def get_pred_model(self):
         with torch.no_grad():
-            model = NRSR(num_relation=self.num_relation,
-                         d_feat=self.d_feat,
-                         num_layers=self.num_layers)
+            self.pred_model = NRSR(num_relation=self.num_relation,
+                                   d_feat=self.d_feat,
+                                   num_layers=self.num_layers)
 
-            model.to(self.device)
-            model.load_state_dict(torch.load(self.model_dir + '/model.bin', map_location=self.device))
+            self.pred_model.to(self.device)
+            self.pred_model.load_state_dict(torch.load(self.model_dir + '/model.bin', map_location=self.device))
 
     def get_explainer(self):
         if self.explainer_name == 'GnnExplainer':
@@ -71,6 +73,9 @@ class Explanation:
 
         elif self.explainer_name == 'EffectExplainer':
             self.explainer = EffectExplainer(self.pred_model)
+
+        elif self.explainer_name == 'random':
+            pass
 
     def load_data(self):
         data_path = r"{}/{}.pkl".format(self.feature_data_path, self.year)
@@ -95,20 +100,19 @@ class Explanation:
             feature, label, market_value, stock_index, index = data_loader.get(slc)
             graph = self.graph_data[stock_index][:, stock_index]
             original_pred = self.pred_model(feature, graph)
-            if self.explainer_name=='random':
-                ran_k_graph, ran_k_comp_graph = self.random_edges_extraction()
+            if self.explainer_name == 'random':
+                ran_k_graph, ran_k_comp_graph = self.random_edges_extraction(graph)
                 fidelity_L1, causality_L1 = self.cal_random_selection_metrics(original_pred, label,
-                                                  feature, ran_k_graph,
-                                                  ran_k_comp_graph)
-                self.evaluation_results[self.explainer_name] += [[fidelity_L1, causality_L1]]
+                                                                              feature, ran_k_graph,
+                                                                              ran_k_comp_graph)
+                self.evaluation_results += [[fidelity_L1, causality_L1]]
 
             else:
-                expl_graph = self.explainer(self.pred_model, feature, graph, args)
+                expl_graph = self.explainer.run_explain(feature, graph)
                 self.EG = nx.from_numpy_array(expl_graph.detach().numpy())
                 self.explained_graph_dict[self.explainer_name] += [self.EG]
                 fidelity_L1, causality_L1 = self.evaluate(original_pred, graph, feature, label)
-                self.evaluation_results[self.explainer_name] += [[fidelity_L1, causality_L1]]
-
+                self.evaluation_results += [[fidelity_L1, causality_L1]]
 
     def save_explanation(self):
         file = r'{}/{}-{}.pkl'.format(self.args.expl_results_dir, self.explainer_name, self.year)
@@ -116,6 +120,11 @@ class Explanation:
         pickle.dump(self.explained_graph_dict[self.explainer_name], f)
         f.close()
         print('Save Explanation {}'.format(file))
+
+    def save_evaluation(self):
+        self.eval_results_df = pd.DataFrame(self.evaluation_results, columns=['fidelity_L1', 'causality_L1'])
+        self.eval_results_df.to_csv(r'{}/{}_{}.csv'.format(r'./result',
+                                                           self.explainer_name, self.year), index=False)
 
     def evaluate(self, original_pred, graph, feature, label):
         top_k_graph, top_k_comp_graph = self.edges_extraction(graph)
@@ -125,7 +134,6 @@ class Explanation:
         fidelity_L1 = Explanation.cal_fidelity(pred_top_k, pred_top_k_comp, original_pred)
         causality_L1 = Explanation.cal_causality(pred_top_k_comp, original_pred, label)
         return fidelity_L1, causality_L1
-
 
     def edges_extraction(self, origin_graph):
         sorted_edges = sorted(self.EG.edges(data=True), key=lambda x: x[2]['weight'], reverse=True)
@@ -137,7 +145,7 @@ class Explanation:
         top_k_comp_graph = Explanation.edges_2_graph(top_k_edges, origin_graph.clone().detach())
         return top_k_graph, top_k_comp_graph
 
-    def cal_random_selection_metrics(self, original_pred, label, feature, random_k_complement,random_k_graph):
+    def cal_random_selection_metrics(self, original_pred, label, feature, random_k_complement, random_k_graph):
         pred_top_k_comp = self.pred_model(feature, random_k_complement)
         pred_top_k = self.pred_model(feature, random_k_graph)
         fidelity_l1 = Explanation.cal_fidelity(pred_top_k_comp, pred_top_k, original_pred)
@@ -145,22 +153,26 @@ class Explanation:
 
         return float(fidelity_l1), float(causality_L1)
 
-    def random_edges_extraction(self):
-        new_graph = torch.zeros([self.graph_data.shape[0], self.graph_data.shape[1]], dtype=torch.int)
-        mask = torch.sum(self.graph_data, 2)  # mask that could have relation value
+    def random_edges_extraction(self, graph):
+        new_graph = torch.zeros([graph.shape[0], graph.shape[1]], dtype=torch.int)
+        mask = torch.sum(graph, 2)  # mask that could have relation value
         index = torch.t((mask == 1).nonzero())
         new_graph[index[0], index[1]] = 1
         G_edge = nx.from_numpy_array(new_graph.detach().numpy())
         G_edge = list(G_edge.edges)
         edge_num = len(G_edge)
-        random.seed(101)
         ran = random.sample(range(0, edge_num), math.ceil(edge_num * self.args.top_k))
         ran_k_edges = [G_edge[x] for x in ran]
         ran_k_comp_edges = [G_edge[x] for x in range(0, edge_num) if x not in ran]
 
-        ran_k_graph = Explanation.edges_2_graph(ran_k_comp_edges, self.graph_data.clone().detach())
-        ran_k_comp_graph = Explanation.edges_2_graph(ran_k_edges, self.graph_data.clone().detach())
+        ran_k_graph = Explanation.edges_2_graph(ran_k_comp_edges, graph.clone().detach())
+        ran_k_comp_graph = Explanation.edges_2_graph(ran_k_edges, graph.clone().detach())
         return ran_k_graph, ran_k_comp_graph
+
+    def cal_mean_evaluation(self):
+        mean_fidelity_L1 = self.eval_results_df['fidelity_L1'].mean()
+        mean_causality_L1 = self.eval_results_df['causality_L1'].mean()
+        return mean_fidelity_L1, mean_causality_L1
 
     @staticmethod
     def cal_fidelity(top_k_comp_pred, top_k_pred, original_pred):
@@ -168,7 +180,6 @@ class Explanation:
         loss_func = torch.nn.L1Loss(reduction='mean')
         top_k_l1 = loss_func(top_k_pred, original_pred)
         top_k_comp_l1 = loss_func(top_k_comp_pred, original_pred)
-
         fidelity_l1 = 1 - top_k_l1 / top_k_comp_l1
         return float(fidelity_l1)
 
@@ -181,13 +192,32 @@ class Explanation:
         causality_l1 = 1 - original_l1 / tok_k_comp_l1
 
         return float(causality_l1)
+
     @staticmethod
     def edges_2_graph(comp_edges, origin_graph):
         for edge in comp_edges:
             origin_graph[edge[0], edge[1]] = 0
         return origin_graph
 
-
-if __name__ == '__main__':
+def run_explain():
     args = parse_args(config.NRSR_dict)
-    ex = Explanation(args)
+    df_mean_expl_result_dict = []
+    for year in ['2020', '2021', '2022']:
+        args.year = year
+        for explainer_name in ['random', 'GnnExplainer', 'InputGradientExplainer', 'GradExplainer', 'EffectExplainer']:
+            Explainer = Explanation(args, year, explainer_name=explainer_name)
+            Explainer.explain()
+            Explainer.save_evaluation()
+            mean_fidelity_L1, mean_causality_L1 = Explainer.cal_mean_evaluation()
+            df_mean_expl_result_dict.append([mean_fidelity_L1, mean_causality_L1])
+
+        df_mean_expl_result_dict = pd.DataFrame(df_mean_expl_result_dict, columns=['fidelity_L1',
+                                                                                   'causality_L1'])
+        df_mean_expl_result_dict.index = ['random', 'GnnExplainer', 'InputGradientExplainer',
+                                          'GradExplainer', 'EffectExplainer']
+
+        df_mean_expl_result_dict.to_csv(r'{}/{}_{}.csv'.format('./result',
+                                                               'mean_evaluation',
+                                                               year), index=True)
+
+
