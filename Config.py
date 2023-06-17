@@ -7,7 +7,7 @@ class config:
         'model_dir': './CheckPoints/csi300_NRSR_3',
         'feature_data_path': './Data',
         'year': '2020',
-        'graph_data_path': './data/csi300_multi_stock2stock_all.npy',
+        'graph_data_path': './Data/csi300_multi_stock2stock_all.npy',
         'd_feat': 6,
         'num_layers': 2,
         'device': 'cpu'
@@ -35,8 +35,8 @@ def parse_args(param_dict):
     parser.add_argument('--lr', type=float, default=0.1)
     parser.add_argument('--size_lamda', type=float, default=0.000001)
     parser.add_argument('--density_lamda', type=float, default=0.01)
-    parser.add_argument('--num_epochs', type=int, default=10)
-    parser.add_argument('--top_k', type=int, default=0.2)
+    parser.add_argument('--num_epochs', type=int, default=5)
+    parser.add_argument('--top_k', type=int, default=0.3)
     parser.add_argument('--device', type=str, default='cpu')
     args = parser.parse_args()
     return args

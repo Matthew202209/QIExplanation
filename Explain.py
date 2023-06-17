@@ -126,6 +126,10 @@ class Explanation:
         self.eval_results_df.to_csv(r'{}/{}_{}.csv'.format(r'./result',
                                                            self.explainer_name, self.year), index=False)
 
+    def get_eval_results_df(self):
+        self.eval_results_df = pd.DataFrame(self.evaluation_results, columns=['fidelity_L1', 'causality_L1'])
+
+
     def evaluate(self, original_pred, graph, feature, label):
         top_k_graph, top_k_comp_graph = self.edges_extraction(graph)
         pred_top_k = self.pred_model(feature, top_k_graph)
@@ -201,19 +205,19 @@ class Explanation:
 
 def run_explain():
     args = parse_args(config.NRSR_dict)
-    df_mean_expl_result_dict = []
     for year in ['2020', '2021', '2022']:
         args.year = year
-        for explainer_name in ['random', 'GnnExplainer', 'InputGradientExplainer', 'GradExplainer', 'EffectExplainer']:
+        df_mean_expl_result_dict = []
+        for explainer_name in ['GnnExplainer', 'InputGradientExplainer(Our)', 'GradExplainer', 'EffectExplainer']:
             Explainer = Explanation(args, year, explainer_name=explainer_name)
             Explainer.explain()
-            Explainer.save_evaluation()
+            Explainer.get_eval_results_df()
             mean_fidelity_L1, mean_causality_L1 = Explainer.cal_mean_evaluation()
             df_mean_expl_result_dict.append([mean_fidelity_L1, mean_causality_L1])
 
         df_mean_expl_result_dict = pd.DataFrame(df_mean_expl_result_dict, columns=['fidelity_L1',
                                                                                    'causality_L1'])
-        df_mean_expl_result_dict.index = ['random', 'GnnExplainer', 'InputGradientExplainer',
+        df_mean_expl_result_dict.index = ['GnnExplainer', 'InputGradientExplainer(Our)',
                                           'GradExplainer', 'EffectExplainer']
 
         df_mean_expl_result_dict.to_csv(r'{}/{}_{}.csv'.format('./result',
